@@ -1,7 +1,8 @@
 import { homedir, hostname } from "os";
-import { access, readFile, mkdir, writeFile } from "fs/promises";
+import { readFile, mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import { parseJSON } from "confbox";
+import { exists } from "./util";
 
 interface ConfigSchema {
   region: string;
@@ -53,7 +54,7 @@ export default class AwsCred {
     const configDir = join(homedir(), ".config", "auto-aws-sso-creds");
     const configPath = join(configDir, "config.json");
 
-    if (await AwsCred.exists(configPath)) {
+    if (await exists(configPath)) {
       try {
         const fileContent = await readFile(configPath, "utf-8");
         const parsed = parseJSON<Partial<ConfigSchema>>(fileContent);
@@ -65,18 +66,6 @@ export default class AwsCred {
     }
 
     return AwsCred.createDefaultConfig(configDir, configPath);
-  }
-
-  /**
-   * Check if a file exists asynchronously
-   */
-  private static async exists(path: string): Promise<boolean> {
-    try {
-      await access(path);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   /**

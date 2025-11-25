@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { readFile, writeFile, access } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 import { parseINI, stringifyINI } from "confbox";
 import { AwsSso } from "./awssso";
 import { AwsCred } from "./awscred";
-import { error } from "./util";
+import { error, exists } from "./util";
 
 interface CredentialsSection {
   aws_access_key_id?: string;
@@ -14,18 +14,6 @@ interface CredentialsSection {
 
 interface CredentialsConfig {
   [section: string]: CredentialsSection;
-}
-
-/**
- * Check if a file exists asynchronously
- */
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 const updateCredentials = async (): Promise<void> => {
