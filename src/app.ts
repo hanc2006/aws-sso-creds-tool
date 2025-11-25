@@ -60,7 +60,7 @@ const updateCredentials = async (): Promise<void> => {
 
   // start authentication flow
   const { clientId, clientSecret } = await registerClient();
-  // needs to the user to be fully logged in
+  // waits for the user to be fully logged in
   const { deviceCode, userCode } = await authorizeDevice(clientId, clientSecret);
 
   const { accessToken } = await pollForAccessToken(
