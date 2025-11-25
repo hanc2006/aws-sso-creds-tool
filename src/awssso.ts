@@ -13,11 +13,19 @@ import {
   StartDeviceAuthorizationCommand,
   CreateTokenCommand,
 } from '@aws-sdk/client-sso-oidc'
+import { EventEmitter } from 'events'
 import open from 'open'
 
 export interface LoginSession {
   accessToken: string
   expiresAt?: number
+  profileName?: string
+}
+
+export interface TokenExpiredEventData {
+  profileName?: string
+  expiresAt?: number
+  expiredAt: number
 }
 
 export interface RoleCredential extends RoleCredentials {
@@ -40,44 +48,149 @@ interface AuthorizationError extends Error {
   name: string
 }
 
+export interface AwsSsoOptions {
+  autoRefresh?: boolean
+}
+
+interface TokenResult {
+  accessToken: string
+  expiresAt?: number
+}
+
 /**
  * AwsSso class encapsulates the SSO session and credential fetching logic
+ * Extends EventEmitter to emit token expiration events
  */
-export default class AwsSso {
-  private readonly _session: LoginSession
+export default class AwsSso extends EventEmitter {
+  private _session: LoginSession
   private readonly _region: string
   private readonly _clientSso: SSOClient
+  private readonly _autoRefresh: boolean
+  private _refreshTimer: ReturnType<typeof setTimeout> | null = null
+  private _startUrl: string | null = null
+  private _clientName: string | null = null
 
-  constructor(session: LoginSession, region: string) {
+  constructor(session: LoginSession, region: string, options?: AwsSsoOptions) {
+    super()
     this._session = session
     this._region = region
     this._clientSso = new SSOClient({ region })
+    this._autoRefresh = options?.autoRefresh ?? false
+    this._startExpirationCheck()
+  }
+
+  /**
+   * Starts the expiration check timer if expiresAt is set
+   */
+  private _startExpirationCheck(): void {
+    if (this._refreshTimer) {
+      clearTimeout(this._refreshTimer)
+      this._refreshTimer = null
+    }
+
+    if (this._session.expiresAt) {
+      const now = Date.now()
+      const timeUntilExpiry = this._session.expiresAt - now
+
+      if (timeUntilExpiry <= 0) {
+        // Token already expired
+        this._handleTokenExpiration()
+      } else {
+        // Set timer to fire when token expires
+        this._refreshTimer = setTimeout(() => {
+          this._handleTokenExpiration()
+        }, timeUntilExpiry)
+      }
+    }
+  }
+
+  /**
+   * Handles token expiration by emitting event and optionally refreshing
+   */
+  private _handleTokenExpiration(): void {
+    const eventData: TokenExpiredEventData = {
+      expiredAt: Date.now(),
+    }
+
+    if (this._session.profileName !== undefined) {
+      eventData.profileName = this._session.profileName
+    }
+    if (this._session.expiresAt !== undefined) {
+      eventData.expiresAt = this._session.expiresAt
+    }
+
+    this.emit('tokenExpired', eventData)
+
+    if (this._autoRefresh && this._startUrl && this._clientName) {
+      this._refreshSession()
+    }
+  }
+
+  /**
+   * Refreshes the session token
+   */
+  private async _refreshSession(): Promise<void> {
+    if (!this._startUrl || !this._clientName) {
+      return
+    }
+
+    try {
+      const profileName = this._session.profileName
+      const newSession = await AwsSso.login(this._startUrl, this._region, this._clientName, profileName)
+      this._session = newSession
+      this._startExpirationCheck()
+      this.emit('tokenRefreshed', { profileName: this._session.profileName })
+    } catch (error) {
+      this.emit('tokenRefreshError', { error, profileName: this._session.profileName })
+    }
+  }
+
+  /**
+   * Stops the expiration check timer
+   */
+  public stopExpirationCheck(): void {
+    if (this._refreshTimer) {
+      clearTimeout(this._refreshTimer)
+      this._refreshTimer = null
+    }
   }
 
   /**
    * Creates an AwsSso instance from SSO start URL and region
    * Performs the full SSO login flow including device authorization
+   * @param startUrl - The AWS SSO start URL
+   * @param region - The AWS region
+   * @param clientName - The client name for registration
+   * @param options - Optional configuration including autoRefresh
+   * @param profileName - Optional profile name to associate with the session
    */
   public static async fromStartUrl(
     startUrl: string,
     region: string,
-    clientName: string
+    clientName: string,
+    options?: AwsSsoOptions,
+    profileName?: string
   ): Promise<AwsSso> {
     if (!startUrl.startsWith('https://')) {
       throw new Error('startUrl must be a valid https url')
     }
 
-    const session = await AwsSso.login(startUrl, region, clientName)
-    return new AwsSso(session, region)
+    const session = await AwsSso.login(startUrl, region, clientName, profileName)
+    const instance = new AwsSso(session, region, options)
+    instance._startUrl = startUrl
+    instance._clientName = clientName
+    return instance
   }
 
   /**
    * Performs the SSO login flow
+   * @param profileName - Optional profile name to associate with the session
    */
   private static async login(
     startUrl: string,
     region: string,
-    clientName: string
+    clientName: string,
+    profileName?: string
   ): Promise<LoginSession> {
     const clientDevice = new SSOOIDCClient({ region })
 
@@ -112,7 +225,7 @@ export default class AwsSso {
     console.info('Waiting for login, to cancel press CTRL+C')
 
     // Poll for access token
-    const accessToken = await AwsSso.pollForAccessToken(
+    const tokenResult = await AwsSso.pollForAccessToken(
       clientDevice,
       clientId,
       clientSecret,
@@ -120,7 +233,18 @@ export default class AwsSso {
       userCode
     )
 
-    return { accessToken }
+    const session: LoginSession = {
+      accessToken: tokenResult.accessToken,
+    }
+
+    if (tokenResult.expiresAt !== undefined) {
+      session.expiresAt = tokenResult.expiresAt
+    }
+    if (profileName !== undefined) {
+      session.profileName = profileName
+    }
+
+    return session
   }
 
   /**
@@ -132,7 +256,7 @@ export default class AwsSso {
     clientSecret: string,
     deviceCode: string,
     userCode: string
-  ): Promise<string> {
+  ): Promise<TokenResult> {
     const createTokenCommand = new CreateTokenCommand({
       clientId,
       clientSecret,
@@ -147,7 +271,12 @@ export default class AwsSso {
       if (!response.accessToken) {
         throw new Error('Failed to get access token: missing accessToken')
       }
-      return response.accessToken
+      // Calculate expiresAt from expiresIn (in seconds) if available
+      const result: TokenResult = { accessToken: response.accessToken }
+      if (response.expiresIn) {
+        result.expiresAt = Date.now() + response.expiresIn * 1000
+      }
+      return result
     } catch (err) {
       const authError = err as AuthorizationError
       if (authError.name === 'AuthorizationPendingException') {
@@ -178,6 +307,30 @@ export default class AwsSso {
    */
   public get region(): string {
     return this._region
+  }
+
+  /**
+   * Gets the profile name from the current session
+   */
+  public get profileName(): string | undefined {
+    return this._session.profileName
+  }
+
+  /**
+   * Gets the expiration time from the current session
+   */
+  public get expiresAt(): number | undefined {
+    return this._session.expiresAt
+  }
+
+  /**
+   * Checks if the session token is expired
+   */
+  public isExpired(): boolean {
+    if (!this._session.expiresAt) {
+      return false
+    }
+    return Date.now() >= this._session.expiresAt
   }
 
   /**
@@ -232,8 +385,10 @@ export default class AwsSso {
       accessKeyId: response.roleCredentials.accessKeyId,
       secretAccessKey: response.roleCredentials.secretAccessKey,
       sessionToken: response.roleCredentials.sessionToken,
-      expiration: response.roleCredentials.expiration,
       region: this._region,
+    }
+    if (response.roleCredentials.expiration !== undefined) {
+      result.expiration = response.roleCredentials.expiration
     }
     return result
   }
