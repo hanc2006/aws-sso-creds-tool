@@ -8,7 +8,6 @@ import {
   sso_accounts,
   startUrl,
   region,
-  clientName,
 } from "./params";
 import { parseINI, stringifyINI } from "confbox";
 import { AwsSso } from "./awssso";
@@ -38,8 +37,8 @@ const updateCredentials = async (): Promise<void> => {
   }
 
   // Create AwsSso instance and perform authentication flow
-  const awsSso = new AwsSso();
-  await awsSso.fromStartUrl(startUrl, region, clientName);
+  const awsSso = new AwsSso({ region, startUrl });
+  await awsSso.login();
 
   // Get all accounts available to the authenticated user
   const { accountList } = await awsSso.getAccounts();
