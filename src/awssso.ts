@@ -83,9 +83,6 @@ export default class AwsSso extends EventEmitter {
     this._startUrl = options?.startUrl ?? null
     this._clientName = options?.clientName ?? null
     this._profileName = options?.profileName
-    if (this._region) {
-      this._clientSso = new SSOClient({ region: this._region })
-    }
   }
 
   /**
@@ -214,7 +211,7 @@ export default class AwsSso extends EventEmitter {
     this._startUrl = startUrl
     this._region = region
     this._clientName = clientName
-    this._clientSso = new SSOClient({ region })
+    this._clientSso = new SSOClient({ region: this._region })
 
     await this.login(startUrl, region, clientName, profileName)
   }
