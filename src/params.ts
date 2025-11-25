@@ -1,8 +1,5 @@
 import { homedir, hostname } from "os";
-import ConfModule from "conf";
-
-// Handle default export from CommonJS module
-const Conf = ConfModule.default ?? ConfModule;
+import Conf from "conf";
 
 interface ConfigSchema {
   region: string;
@@ -10,19 +7,10 @@ interface ConfigSchema {
   useAccountId: boolean;
   defaultSection: string;
   accounts: string;
-  awsCredentialsPath?: string;
+  awsCredentialsPath: string | undefined;
 }
 
-interface ConfInstance {
-  get<K extends keyof ConfigSchema>(key: K): ConfigSchema[K];
-}
-
-type ConfConstructor = new (options: {
-  projectName: string;
-  defaults: ConfigSchema;
-}) => ConfInstance;
-
-const config = new (Conf as ConfConstructor)({
+const config = new Conf<ConfigSchema>({
   projectName: "auto-aws-sso-creds",
   defaults: {
     region: "us-east-1",
@@ -30,6 +18,7 @@ const config = new (Conf as ConfConstructor)({
     useAccountId: true,
     defaultSection: "<account-id>_<role-name>",
     accounts: "account1, account2, account3",
+    awsCredentialsPath: undefined,
   },
 });
 

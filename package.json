@@ -3,7 +3,7 @@
   "projectName": "auto-aws-sso-creds",
   "description": "script to (almost)auto update aws sso credentials",
   "version": "1.0.4",
-  "exports": "./dist/app.js",
+  "exports": "./src/app.ts",
   "types": "./dist/app.d.ts",
   "type": "module",
   "license": "MIT",
@@ -13,7 +13,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "node ./dist/app.js",
+    "start": "tsx ./src/app.ts",
+    "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -23,11 +24,12 @@
   ],
   "homepage": "https://github.com/leandrosalo/aws-sso-creds-tool#readme",
   "dependencies": {
-    "@aws-sdk/client-sso": "^3.18.0",
-    "@aws-sdk/client-sso-oidc": "^3.18.0",
-    "conf": "^10.1.2",
-    "configparser": "^0.3.9",
-    "open": "^10"
+    "@aws-sdk/client-sso": "^3.936.0",
+    "@aws-sdk/client-sso-oidc": "^3.939.0",
+    "conf": "^15.0.2",
+    "configparser": "^0.3.10",
+    "open": "^11.0.0",
+    "tsx": "^4.20.6"
   },
   "keywords": [
     "aws",
@@ -40,11 +42,11 @@
     "single sign on"
   ],
   "bin": {
-    "auto-aws": "./dist/app.js"
+    "auto-aws": "./src/app.ts"
   },
   "engines": {
     "npm": ">=7.0.0",
-    "node": ">=18"
+    "node": ">=24"
   },
   "author": "",
   "devDependencies": {
