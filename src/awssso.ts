@@ -80,6 +80,12 @@ export default class AwsSso extends EventEmitter {
   }
 
   /**
+   * Maximum timeout in milliseconds (24 hours) for expiration check timer.
+   * This prevents issues with very long timeouts and ensures periodic re-checks.
+   */
+  private static readonly MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000
+
+  /**
    * Starts the expiration check timer if expiresAt is set
    */
   private _startExpirationCheck(): void {
@@ -96,10 +102,16 @@ export default class AwsSso extends EventEmitter {
         // Token already expired
         this._handleTokenExpiration()
       } else {
-        // Set timer to fire when token expires
+        // Set timer with a maximum limit to prevent excessively long timeouts
+        const timeout = Math.min(timeUntilExpiry, AwsSso.MAX_TIMEOUT_MS)
         this._refreshTimer = setTimeout(() => {
-          this._handleTokenExpiration()
-        }, timeUntilExpiry)
+          // If we hit the max timeout but token hasn't expired yet, re-check
+          if (this._session.expiresAt && Date.now() < this._session.expiresAt) {
+            this._startExpirationCheck()
+          } else {
+            this._handleTokenExpiration()
+          }
+        }, timeout)
       }
     }
   }
@@ -122,7 +134,14 @@ export default class AwsSso extends EventEmitter {
     this.emit('tokenExpired', eventData)
 
     if (this._autoRefresh && this._startUrl && this._clientName) {
-      this._refreshSession()
+      this._refreshSession().catch((error) => {
+        this.emit('tokenRefreshError', { error, profileName: this._session.profileName })
+      })
+    } else if (this._autoRefresh && (!this._startUrl || !this._clientName)) {
+      this.emit('tokenRefreshError', {
+        error: new Error('Cannot auto-refresh: missing startUrl or clientName. Use fromStartUrl() to enable auto-refresh.'),
+        profileName: this._session.profileName,
+      })
     }
   }
 
@@ -131,7 +150,7 @@ export default class AwsSso extends EventEmitter {
    */
   private async _refreshSession(): Promise<void> {
     if (!this._startUrl || !this._clientName) {
-      return
+      throw new Error('Cannot refresh session: missing startUrl or clientName')
     }
 
     try {
@@ -142,6 +161,7 @@ export default class AwsSso extends EventEmitter {
       this.emit('tokenRefreshed', { profileName: this._session.profileName })
     } catch (error) {
       this.emit('tokenRefreshError', { error, profileName: this._session.profileName })
+      throw error
     }
   }
 
