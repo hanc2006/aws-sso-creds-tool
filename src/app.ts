@@ -94,7 +94,7 @@ const updateCredentials = async (): Promise<void> => {
           }
         } catch (e) {
           if (e instanceof Error) {
-            awsSso.logError(e.message, accountId, roleName);
+            console.error(`${e.message} for account ${accountId}, role: ${roleName}`);
           } else {
             console.error(`Error fetching credentials for ${accountName}_${roleName}`);
           }

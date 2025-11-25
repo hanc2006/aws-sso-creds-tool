@@ -1,4 +1,3 @@
-import chalk from 'chalk'
 import {
   SSOClient,
   GetRoleCredentialsCommand,
@@ -237,15 +236,6 @@ export default class AwsSso {
       region: this._region,
     }
     return result
-  }
-
-  /**
-   * Logs an error message with formatting
-   */
-  public logError(message: string, accountId: string, roleName: string): void {
-    console.error(
-      `${chalk.red(message)} for account ${chalk.green(accountId)}, role: ${chalk.green(roleName)}`
-    )
   }
 }
 
