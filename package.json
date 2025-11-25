@@ -12,7 +12,7 @@
     "url": "git+https://github.com/rafaelndev/aws-sso-creds-tool.git"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "swc src -d dist --strip-leading-paths && tsc",
     "start": "node --import @swc-node/register/esm-register ./src/app.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
@@ -51,6 +51,7 @@
   },
   "author": "",
   "devDependencies": {
+    "@swc/cli": "^0.7.9",
     "@types/node": "^24.10.1",
     "typescript": "^5.9.3"
   }
