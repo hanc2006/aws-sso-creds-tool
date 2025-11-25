@@ -2,7 +2,7 @@
 
 ##### (couldn't find a better name)
 
-This **AWS SSO Credentials Tool** is a script in nodejs to (almost)automatically update your local credentials file of aws.
+This **AWS SSO Credentials Tool** is a script in Node.js to (almost)automatically update your local credentials file of AWS.
 
 I say _almost_ because at some point you'll need to click a button (or two in the worst scenario).
 
@@ -10,11 +10,17 @@ _Disclaimer: this is NOT intended to use as a dependency, it is just a script. T
 
 ## Motivation
 
-The SSO credentials expires every day, so I did not want to update this file manually.
+The SSO credentials expire every day, so I did not want to update this file manually.
 
 ## Requirements
 
-- Node.js 16+ - [Install Node.js](https://nodejs.org/en/), including the npm package management tool.
+- Node.js 24+ - [Install Node.js](https://nodejs.org/en/), including the npm package management tool.
+
+## Installation
+
+```bash
+npm install -g auto-aws-sso-creds
+```
 
 ## How to use
 
@@ -23,16 +29,16 @@ The SSO credentials expires every day, so I did not want to update this file man
 When running for the first time, a config.json file will be created on path:
 
 ```
-~/.config/auto-aws-sso-creds-nodejs/config.json
+~/.config/auto-aws-sso-creds/config.json
 ```
 
 Then you need to change its parameters:
 
 It is required to set the sso url like this:
 
-```shell
+```json
 {
-    ssoUrl: "https://<your-project>.awsapps.com/start#/"
+  "ssoUrl": "https://<your-project>.awsapps.com/start#/"
 }
 ```
 
@@ -52,22 +58,22 @@ If you want to change it, add this:
 
 ```json
 {
-    region: "us-east-1"
-    ssoUrl: "https://<your-project>.awsapps.com/start#/"
-    awsCredentialsPath: "/home/<user>/.aws/credentials" // Optional
-    useAccountId: true
-    defaultSection: "<account_id>_<role_name>" // section to be used to create a [default] section in credentials
-    accounts: "account1,account2,account3"
+  "region": "us-east-1",
+  "ssoUrl": "https://<your-project>.awsapps.com/start#/",
+  "awsCredentialsPath": "/home/<user>/.aws/credentials",
+  "useAccountId": true,
+  "defaultSection": "<account_id>_<role_name>",
+  "accounts": "account1,account2,account3"
 }
 ```
 
 ### First time use
 
-1. Run `npm install` in this folder
-2. Update the `~/.config/aws-sso-creds-tool-nodejs/config.json` with the correct values
-3. Run `node app.js` or create an alias
-4. At some point the aws webpage will popup
-   1. Log in to aws if you are not already
+1. Install the package globally: `npm install -g auto-aws-sso-creds`
+2. Update the `~/.config/auto-aws-sso-creds/config.json` with the correct values
+3. Run `auto-aws` (or `npx auto-aws-sso-creds` if not installed globally)
+4. At some point the AWS webpage will popup
+   1. Log in to AWS if you are not already
    2. The code for device authentication will be auto filled
    3. Click on Sign In
 
@@ -77,9 +83,9 @@ If you want to change it, add this:
 
 <img width="346" alt="Screen Shot 2021-06-25 at 11 59 36" src="https://user-images.githubusercontent.com/7031690/123454778-52cf9780-d5b7-11eb-9081-c2a08c2430b0.png">
 
-7. Done!
+6. Done!
 
-For consecuents runs just start from step 3.
+For subsequent runs just start from step 3.
 
 # Authors
 
