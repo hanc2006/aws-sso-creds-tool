@@ -14,6 +14,7 @@ import {
   CreateTokenCommand,
 } from '@aws-sdk/client-sso-oidc'
 import { EventEmitter } from 'events'
+import { setTimeout as setTimeoutPromise } from 'node:timers/promises'
 import open from 'open'
 
 export interface LoginSession {
@@ -50,6 +51,10 @@ interface AuthorizationError extends Error {
 
 export interface AwsSsoOptions {
   autoRefresh?: boolean
+  region?: string
+  startUrl?: string
+  clientName?: string
+  profileName?: string
 }
 
 interface TokenResult {
@@ -62,21 +67,25 @@ interface TokenResult {
  * Extends EventEmitter to emit token expiration events
  */
 export default class AwsSso extends EventEmitter {
-  private _session: LoginSession
-  private readonly _region: string
-  private readonly _clientSso: SSOClient
+  private _session: LoginSession | null = null
+  private _region: string | null = null
+  private _clientSso: SSOClient | null = null
   private readonly _autoRefresh: boolean
-  private _refreshTimer: ReturnType<typeof setTimeout> | null = null
+  private _abortController: AbortController | null = null
   private _startUrl: string | null = null
   private _clientName: string | null = null
+  private _profileName: string | undefined
 
-  constructor(session: LoginSession, region: string, options?: AwsSsoOptions) {
+  constructor(options?: AwsSsoOptions) {
     super()
-    this._session = session
-    this._region = region
-    this._clientSso = new SSOClient({ region })
     this._autoRefresh = options?.autoRefresh ?? false
-    this._startExpirationCheck()
+    this._region = options?.region ?? null
+    this._startUrl = options?.startUrl ?? null
+    this._clientName = options?.clientName ?? null
+    this._profileName = options?.profileName
+    if (this._region) {
+      this._clientSso = new SSOClient({ region: this._region })
+    }
   }
 
   /**
@@ -86,15 +95,16 @@ export default class AwsSso extends EventEmitter {
   private static readonly MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000
 
   /**
-   * Starts the expiration check timer if expiresAt is set
+   * Starts the expiration check using promise-based timer with AbortController
    */
   private _startExpirationCheck(): void {
-    if (this._refreshTimer) {
-      clearTimeout(this._refreshTimer)
-      this._refreshTimer = null
+    // Abort any existing timer
+    if (this._abortController) {
+      this._abortController.abort()
+      this._abortController = null
     }
 
-    if (this._session.expiresAt) {
+    if (this._session?.expiresAt) {
       const now = Date.now()
       const timeUntilExpiry = this._session.expiresAt - now
 
@@ -104,14 +114,25 @@ export default class AwsSso extends EventEmitter {
       } else {
         // Set timer with a maximum limit to prevent excessively long timeouts
         const timeout = Math.min(timeUntilExpiry, AwsSso.MAX_TIMEOUT_MS)
-        this._refreshTimer = setTimeout(() => {
-          // If we hit the max timeout but token hasn't expired yet, re-check
-          if (this._session.expiresAt && Date.now() < this._session.expiresAt) {
-            this._startExpirationCheck()
-          } else {
-            this._handleTokenExpiration()
-          }
-        }, timeout)
+        this._abortController = new AbortController()
+        const signal = this._abortController.signal
+
+        setTimeoutPromise(timeout, undefined, { signal })
+          .then(() => {
+            // If we hit the max timeout but token hasn't expired yet, re-check
+            if (this._session?.expiresAt && Date.now() < this._session.expiresAt) {
+              this._startExpirationCheck()
+            } else {
+              this._handleTokenExpiration()
+            }
+          })
+          .catch((err: Error) => {
+            if (err.name === 'AbortError') {
+              // Timer was aborted, this is expected behavior
+              return
+            }
+            console.error('Expiration check error:', err)
+          })
       }
     }
   }
@@ -124,23 +145,23 @@ export default class AwsSso extends EventEmitter {
       expiredAt: Date.now(),
     }
 
-    if (this._session.profileName !== undefined) {
+    if (this._session?.profileName !== undefined) {
       eventData.profileName = this._session.profileName
     }
-    if (this._session.expiresAt !== undefined) {
+    if (this._session?.expiresAt !== undefined) {
       eventData.expiresAt = this._session.expiresAt
     }
 
     this.emit('tokenExpired', eventData)
 
-    if (this._autoRefresh && this._startUrl && this._clientName) {
+    if (this._autoRefresh && this._startUrl && this._clientName && this._region) {
       this._refreshSession().catch((error) => {
-        this.emit('tokenRefreshError', { error, profileName: this._session.profileName })
+        this.emit('tokenRefreshError', { error, profileName: this._session?.profileName })
       })
-    } else if (this._autoRefresh && (!this._startUrl || !this._clientName)) {
+    } else if (this._autoRefresh && (!this._startUrl || !this._clientName || !this._region)) {
       this.emit('tokenRefreshError', {
-        error: new Error('Cannot auto-refresh: missing startUrl or clientName. Use fromStartUrl() to enable auto-refresh.'),
-        profileName: this._session.profileName,
+        error: new Error('Cannot auto-refresh: missing startUrl, clientName, or region. Use fromStartUrl() to enable auto-refresh.'),
+        profileName: this._session?.profileName,
       })
     }
   }
@@ -149,18 +170,16 @@ export default class AwsSso extends EventEmitter {
    * Refreshes the session token
    */
   private async _refreshSession(): Promise<void> {
-    if (!this._startUrl || !this._clientName) {
-      throw new Error('Cannot refresh session: missing startUrl or clientName')
+    if (!this._startUrl || !this._clientName || !this._region) {
+      throw new Error('Cannot refresh session: missing startUrl, clientName, or region')
     }
 
     try {
-      const profileName = this._session.profileName
-      const newSession = await AwsSso.login(this._startUrl, this._region, this._clientName, profileName)
-      this._session = newSession
-      this._startExpirationCheck()
-      this.emit('tokenRefreshed', { profileName: this._session.profileName })
+      const profileName = this._session?.profileName
+      await this.login(this._startUrl, this._region, this._clientName, profileName)
+      this.emit('tokenRefreshed', { profileName: this._session?.profileName })
     } catch (error) {
-      this.emit('tokenRefreshError', { error, profileName: this._session.profileName })
+      this.emit('tokenRefreshError', { error, profileName: this._session?.profileName })
       throw error
     }
   }
@@ -169,49 +188,50 @@ export default class AwsSso extends EventEmitter {
    * Stops the expiration check timer
    */
   public stopExpirationCheck(): void {
-    if (this._refreshTimer) {
-      clearTimeout(this._refreshTimer)
-      this._refreshTimer = null
+    if (this._abortController) {
+      this._abortController.abort()
+      this._abortController = null
     }
   }
 
   /**
-   * Creates an AwsSso instance from SSO start URL and region
-   * Performs the full SSO login flow including device authorization
+   * Performs the SSO login flow and stores session in the instance
    * @param startUrl - The AWS SSO start URL
    * @param region - The AWS region
    * @param clientName - The client name for registration
-   * @param options - Optional configuration including autoRefresh
    * @param profileName - Optional profile name to associate with the session
    */
-  public static async fromStartUrl(
+  public async fromStartUrl(
     startUrl: string,
     region: string,
     clientName: string,
-    options?: AwsSsoOptions,
     profileName?: string
-  ): Promise<AwsSso> {
+  ): Promise<void> {
     if (!startUrl.startsWith('https://')) {
       throw new Error('startUrl must be a valid https url')
     }
 
-    const session = await AwsSso.login(startUrl, region, clientName, profileName)
-    const instance = new AwsSso(session, region, options)
-    instance._startUrl = startUrl
-    instance._clientName = clientName
-    return instance
+    this._startUrl = startUrl
+    this._region = region
+    this._clientName = clientName
+    this._clientSso = new SSOClient({ region })
+
+    await this.login(startUrl, region, clientName, profileName)
   }
 
   /**
-   * Performs the SSO login flow
+   * Performs the SSO login flow and stores the session
+   * @param startUrl - The AWS SSO start URL
+   * @param region - The AWS region
+   * @param clientName - The client name for registration
    * @param profileName - Optional profile name to associate with the session
    */
-  private static async login(
+  public async login(
     startUrl: string,
     region: string,
     clientName: string,
     profileName?: string
-  ): Promise<LoginSession> {
+  ): Promise<void> {
     const clientDevice = new SSOOIDCClient({ region })
 
     // Register client
@@ -245,7 +265,7 @@ export default class AwsSso extends EventEmitter {
     console.info('Waiting for login, to cancel press CTRL+C')
 
     // Poll for access token
-    const tokenResult = await AwsSso.pollForAccessToken(
+    const tokenResult = await this.pollForAccessToken(
       clientDevice,
       clientId,
       clientSecret,
@@ -253,6 +273,7 @@ export default class AwsSso extends EventEmitter {
       userCode
     )
 
+    // Store session in the instance
     const session: LoginSession = {
       accessToken: tokenResult.accessToken,
     }
@@ -264,13 +285,14 @@ export default class AwsSso extends EventEmitter {
       session.profileName = profileName
     }
 
-    return session
+    this._session = session
+    this._startExpirationCheck()
   }
 
   /**
    * Polls for access token until authorization is complete
    */
-  private static async pollForAccessToken(
+  private async pollForAccessToken(
     clientDevice: SSOOIDCClient,
     clientId: string,
     clientSecret: string,
@@ -303,7 +325,7 @@ export default class AwsSso extends EventEmitter {
         return new Promise((resolve) => {
           setTimeout(
             () =>
-              AwsSso.pollForAccessToken(clientDevice, clientId, clientSecret, deviceCode, userCode).then(
+              this.pollForAccessToken(clientDevice, clientId, clientSecret, deviceCode, userCode).then(
                 resolve
               ),
             1000
@@ -319,6 +341,9 @@ export default class AwsSso extends EventEmitter {
    * Gets the access token from the current session
    */
   public get accessToken(): string {
+    if (!this._session) {
+      throw new Error('No active session. Call fromStartUrl() or login() first.')
+    }
     return this._session.accessToken
   }
 
@@ -326,6 +351,9 @@ export default class AwsSso extends EventEmitter {
    * Gets the region for the SSO client
    */
   public get region(): string {
+    if (!this._region) {
+      throw new Error('No region configured. Call fromStartUrl() or login() first.')
+    }
     return this._region
   }
 
@@ -333,21 +361,21 @@ export default class AwsSso extends EventEmitter {
    * Gets the profile name from the current session
    */
   public get profileName(): string | undefined {
-    return this._session.profileName
+    return this._session?.profileName
   }
 
   /**
    * Gets the expiration time from the current session
    */
   public get expiresAt(): number | undefined {
-    return this._session.expiresAt
+    return this._session?.expiresAt
   }
 
   /**
    * Checks if the session token is expired
    */
   public isExpired(): boolean {
-    if (!this._session.expiresAt) {
+    if (!this._session?.expiresAt) {
       return false
     }
     return Date.now() >= this._session.expiresAt
@@ -357,6 +385,9 @@ export default class AwsSso extends EventEmitter {
    * Lists all accounts available to the authenticated user
    */
   public async getAccounts(): Promise<AccountsResult> {
+    if (!this._session || !this._clientSso) {
+      throw new Error('No active session. Call fromStartUrl() or login() first.')
+    }
     const listAccountsCommand = new ListAccountsCommand({
       accessToken: this._session.accessToken,
     })
@@ -371,6 +402,9 @@ export default class AwsSso extends EventEmitter {
    * Lists all roles for a specific account
    */
   public async getAccountRoles(accountId: string): Promise<AccountRolesResult> {
+    if (!this._session || !this._clientSso) {
+      throw new Error('No active session. Call fromStartUrl() or login() first.')
+    }
     const listAccountRolesCommand = new ListAccountRolesCommand({
       accessToken: this._session.accessToken,
       accountId,
@@ -386,6 +420,9 @@ export default class AwsSso extends EventEmitter {
    * Gets credentials for a specific account and role
    */
   public async getCredentials(accountId: string, roleName: string): Promise<RoleCredential> {
+    if (!this._session || !this._clientSso || !this._region) {
+      throw new Error('No active session. Call fromStartUrl() or login() first.')
+    }
     const getRoleCredentialsCommand = new GetRoleCredentialsCommand({
       accessToken: this._session.accessToken,
       accountId,
