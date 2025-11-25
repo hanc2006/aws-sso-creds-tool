@@ -3,7 +3,6 @@
   "projectName": "auto-aws-sso-creds",
   "description": "script to (almost)auto update aws sso credentials",
   "version": "1.0.4",
-  "exports": "./src/app.ts",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -21,11 +20,11 @@
     "@aws-sdk/client-sso-oidc": "^3.939.0",
     "conf": "^15.0.2",
     "configparser": "^0.3.10",
-    "open": "^11.0.0"
+    "open": "^11.0.0",
+    "tsx": "^4.20.6"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "keywords": [
@@ -39,7 +38,7 @@
     "single sign on"
   ],
   "bin": {
-    "auto-aws": "./src/app.ts"
+    "auto-aws": "./bin/cli.js"
   },
   "engines": {
     "npm": ">=7.0.0",

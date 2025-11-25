@@ -11,12 +11,16 @@ const config = new Conf({
   },
 });
 
-export const startUrl =
-  config.get("ssoUrl") ?? console.error("please set the sso default url");
-export const awsCredentialsPath =
+const ssoUrl = config.get("ssoUrl");
+if (!ssoUrl) {
+  throw new Error("please set the sso default url");
+}
+export const startUrl: string = ssoUrl;
+export const awsCredentialsPath: string =
   config.get("awsCredentialsPath") ?? `${homedir()}/.aws/credentials`;
-export const useAccountId = config.get("useAccountId");
-export const sso_accounts = config.get("accounts")?.split(",");
-export const region = config.get("region") ?? "us-east-1";
-export const clientName = hostname();
-export const defaultSection = config.get("defaultSection") ?? "ViewOnlyAccess";
+export const useAccountId = config.get("useAccountId") as boolean;
+const accountsConfig = config.get("accounts");
+export const sso_accounts: string[] = accountsConfig ? accountsConfig.split(",") : [];
+export const region: string = config.get("region") ?? "us-east-1";
+export const clientName: string = hostname();
+export const defaultSection: string = config.get("defaultSection") ?? "ViewOnlyAccess";
