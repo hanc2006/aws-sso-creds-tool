@@ -45,20 +45,11 @@ export interface AccountRolesResult {
   roleList: RoleInfo[]
 }
 
-interface AuthorizationError extends Error {
-  name: string
-}
-
 export interface AwsSsoOptions {
   autoRefresh?: boolean
   region: string
   startUrl: string
   profileName?: string
-}
-
-interface TokenResult {
-  accessToken: string
-  expiresAt?: number
 }
 
 /**
@@ -215,22 +206,27 @@ export default class AwsSso extends EventEmitter {
     await open(`${verificationUri}?user_code=${userCode}`)
     console.info('Waiting for login, to cancel press CTRL+C')
 
-    // Poll for access token
-    const tokenResult = await this.pollForAccessToken(
-      clientDevice,
+    // Create token
+    const createTokenCommand = new CreateTokenCommand({
       clientId,
       clientSecret,
+      grantType: 'urn:ietf:params:oauth:grant-type:device_code',
       deviceCode,
-      userCode
-    )
+      code: userCode,
+    })
+    const tokenResponse = await clientDevice.send(createTokenCommand)
+
+    if (!tokenResponse.accessToken) {
+      throw new Error('Failed to get access token: missing accessToken')
+    }
 
     // Store session in the instance
     const session: LoginSession = {
-      accessToken: tokenResult.accessToken,
+      accessToken: tokenResponse.accessToken,
     }
 
-    if (tokenResult.expiresAt !== undefined) {
-      session.expiresAt = tokenResult.expiresAt
+    if (tokenResponse.expiresIn) {
+      session.expiresAt = Date.now() + tokenResponse.expiresIn * 1000
     }
     if (profileName !== undefined) {
       session.profileName = profileName
@@ -238,54 +234,6 @@ export default class AwsSso extends EventEmitter {
 
     this._session = session
     this._startExpirationCheck()
-  }
-
-  /**
-   * Polls for access token until authorization is complete
-   */
-  private async pollForAccessToken(
-    clientDevice: SSOOIDCClient,
-    clientId: string,
-    clientSecret: string,
-    deviceCode: string,
-    userCode: string
-  ): Promise<TokenResult> {
-    const createTokenCommand = new CreateTokenCommand({
-      clientId,
-      clientSecret,
-      grantType: 'urn:ietf:params:oauth:grant-type:device_code',
-      deviceCode,
-      // AWS SDK uses 'code' parameter which takes the userCode value
-      code: userCode,
-    })
-
-    try {
-      const response = await clientDevice.send(createTokenCommand)
-      if (!response.accessToken) {
-        throw new Error('Failed to get access token: missing accessToken')
-      }
-      // Calculate expiresAt from expiresIn (in seconds) if available
-      const result: TokenResult = { accessToken: response.accessToken }
-      if (response.expiresIn) {
-        result.expiresAt = Date.now() + response.expiresIn * 1000
-      }
-      return result
-    } catch (err) {
-      const authError = err as AuthorizationError
-      if (authError.name === 'AuthorizationPendingException') {
-        return new Promise((resolve) => {
-          setTimeout(
-            () =>
-              this.pollForAccessToken(clientDevice, clientId, clientSecret, deviceCode, userCode).then(
-                resolve
-              ),
-            1000
-          )
-        })
-      }
-      console.error(err)
-      throw err
-    }
   }
 
   /**
