@@ -1,6 +1,6 @@
 import open from "open";
 
-import { startUrl, region, clientName } from "./params.js";
+import { startUrl, region, clientName } from "./params";
 
 import {
   SSOClient,

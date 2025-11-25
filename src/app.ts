@@ -9,10 +9,10 @@ import {
   startUrl,
   region,
   clientName,
-} from "./params.js";
+} from "./params";
 import { parseINI, stringifyINI } from "confbox";
-import { AwsSso } from "./awssso.js";
-import { error } from "./util.js";
+import { AwsSso } from "./awssso";
+import { error } from "./util";
 
 interface CredentialsSection {
   aws_access_key_id?: string;
