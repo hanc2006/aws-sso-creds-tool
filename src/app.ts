@@ -1,18 +1,10 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, existsSync } from "fs";
-import {
-  awsCredentialsPath,
-  useAccountId,
-  defaultSection,
-  sso_accounts,
-  startUrl,
-  region,
-  clientName,
-} from "./params";
+import { readFile, writeFile } from "fs/promises";
 import { parseINI, stringifyINI } from "confbox";
 import { AwsSso } from "./awssso";
-import { error } from "./util";
+import { AwsCred } from "./awscred";
+import { error, exists } from "./util";
 
 interface CredentialsSection {
   aws_access_key_id?: string;
@@ -24,21 +16,24 @@ interface CredentialsConfig {
   [section: string]: CredentialsSection;
 }
 
-let config: CredentialsConfig = {};
-
 const updateCredentials = async (): Promise<void> => {
+  // Load configuration using AwsCred class
+  const awsCred = await AwsCred.load();
+  
+  let config: CredentialsConfig = {};
+
   // search for credentials file first, default: ~/.aws/credentials
   try {
-    if (existsSync(awsCredentialsPath)) {
-      const fileContent = readFileSync(awsCredentialsPath, "utf-8");
+    if (await exists(awsCred.awsCredentialsPath)) {
+      const fileContent = await readFile(awsCred.awsCredentialsPath, "utf-8");
       config = parseINI(fileContent) as CredentialsConfig;
     }
   } catch (e) {
-    error("cannot open file: " + awsCredentialsPath);
+    error("cannot open file: " + awsCred.awsCredentialsPath);
   }
 
   // Create AwsSso instance which handles the full authentication flow
-  const awsSso = await AwsSso.fromStartUrl(startUrl, region, clientName);
+  const awsSso = await AwsSso.fromStartUrl(awsCred.startUrl, awsCred.region, awsCred.clientName);
 
   // Get all accounts available to the authenticated user
   const { accountList } = await awsSso.getAccounts();
@@ -56,7 +51,7 @@ const updateCredentials = async (): Promise<void> => {
         continue;
       }
 
-      if (sso_accounts.includes(accountName)) {
+      if (awsCred.ssoAccounts.includes(accountName)) {
         try {
           // Use AwsSso.getCredentials method instead of getAccountRoleCredentials
           const roleCredentials = await awsSso.getCredentials(accountId, roleName);
@@ -69,7 +64,7 @@ const updateCredentials = async (): Promise<void> => {
           }
 
           // default format is [account-name_AWSRoleName]
-          const account_section_name = useAccountId
+          const account_section_name = awsCred.useAccountId
             ? `${accountId}_${roleName}`
             : `${accountName}_${roleName}`;
 
@@ -82,7 +77,7 @@ const updateCredentials = async (): Promise<void> => {
           config[account_section_name].aws_session_token = sessionToken;
           console.log(config[account_section_name]);
 
-          if (account_section_name === defaultSection) {
+          if (account_section_name === awsCred.defaultSection) {
             const default_section = "default";
             if (!config[default_section]) {
               config[default_section] = {};
@@ -104,7 +99,7 @@ const updateCredentials = async (): Promise<void> => {
   }
 
   // saves changes into credentials file
-  writeFileSync(awsCredentialsPath, stringifyINI(config));
+  await writeFile(awsCred.awsCredentialsPath, stringifyINI(config));
   console.log("credentials updated");
 };
 
