@@ -7,6 +7,7 @@ import {
   sso_accounts,
 } from "./params.js";
 import ConfigParser from "configparser";
+import type { CreateTokenCommandOutput } from "@aws-sdk/client-sso-oidc";
 import {
   getAccountRoleCredentials,
   getAccountRoles,
@@ -15,19 +16,19 @@ import {
   authorizeDevice,
   registerClient,
 } from "./aws.js";
-import { error } from "./util.js";
+import { error as throwError } from "./util.js";
 const config = new ConfigParser();
 
 async function pollForAccessToken(
-  clientId,
-  clientSecret,
-  deviceCode,
-  userCode
-) {
+  clientId: string,
+  clientSecret: string,
+  deviceCode: string,
+  userCode: string
+): Promise<CreateTokenCommandOutput> {
   return getAccessToken(clientId, clientSecret, deviceCode, userCode).catch(
-    (error) => {
+    (error: Error & { name: string }) => {
       if (error.name === "AuthorizationPendingException") {
-        return new Promise((resolve) => {
+        return new Promise<CreateTokenCommandOutput>((resolve) => {
           setTimeout(
             () =>
               pollForAccessToken(
@@ -41,6 +42,7 @@ async function pollForAccessToken(
         });
       }
       console.error(error);
+      throw error;
     }
   );
 }
@@ -48,18 +50,27 @@ async function pollForAccessToken(
 const updateCredentials = async () => {
   // search for credentials file first, default: ~/.aws/credentials
   try {
-    await config.readAsync(awsCredentialsPath);
+    await config.readAsync(awsCredentialsPath as string);
   } catch (e) {
-    error("cannot open file: " + awsCredentialsPath);
+    throwError("cannot open file: " + awsCredentialsPath);
   }
 
   // start authentication flow
   const { clientId, clientSecret } = await registerClient();
+  
+  if (!clientId || !clientSecret) {
+    throwError("Failed to register client");
+  }
+  
   // needs to the user to be fully logged in
   const { deviceCode, userCode } = await authorizeDevice(
     clientId,
     clientSecret
   );
+
+  if (!deviceCode || !userCode) {
+    throwError("Failed to authorize device");
+  }
 
   // const { accessToken } = await getAccessToken(clientId, clientSecret, deviceCode, userCode);
   const { accessToken } = await pollForAccessToken(
@@ -68,15 +79,35 @@ const updateCredentials = async () => {
     deviceCode,
     userCode
   );
+  
+  if (!accessToken) {
+    throwError("Failed to get access token");
+  }
+  
   const { accountList } = await getAccounts(accessToken);
 
+  if (!accountList) {
+    throwError("Failed to get account list");
+  }
+
   for (const { accountId, accountName } of accountList) {
+    if (!accountId) continue;
+    
     const { roleList } = await getAccountRoles(accessToken, accountId);
 
+    if (!roleList) continue;
+
     for (const { roleName } of roleList) {
+      if (!roleName || !accountName) continue;
+      
       if (sso_accounts.includes(accountName)) {
-        const { accessKeyId, secretAccessKey, sessionToken } =
-          await getAccountRoleCredentials(accessToken, accountId, roleName);
+        const roleCredentials = await getAccountRoleCredentials(accessToken, accountId, roleName);
+        
+        if (!roleCredentials) continue;
+        
+        const { accessKeyId, secretAccessKey, sessionToken } = roleCredentials;
+
+        if (!accessKeyId || !secretAccessKey || !sessionToken) continue;
 
         // default format is [account-name_AWSRoleName]
         const account_section_name = useAccountId
@@ -109,7 +140,7 @@ const updateCredentials = async () => {
   }
 
   // saves changes into credentials file
-  config.write(awsCredentialsPath);
+  config.write(awsCredentialsPath as string);
   console.log("credentials updated");
 };
 

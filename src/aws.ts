@@ -26,7 +26,7 @@ export async function registerClient() {
   return await clientDevice.send(registerClientCommand);
 }
 
-export async function authorizeDevice(clientId, clientSecret) {
+export async function authorizeDevice(clientId: string, clientSecret: string) {
   const startDeviceAuthorizationCommand = new StartDeviceAuthorizationCommand({
     clientId: clientId,
     clientSecret: clientSecret,
@@ -46,10 +46,10 @@ export async function authorizeDevice(clientId, clientSecret) {
 }
 
 export async function getAccessToken(
-  clientId,
-  clientSecret,
-  deviceCode,
-  userCode
+  clientId: string,
+  clientSecret: string,
+  deviceCode: string,
+  userCode: string
 ) {
   const createTokenCommand = new CreateTokenCommand({
     clientId: clientId,
@@ -61,14 +61,14 @@ export async function getAccessToken(
   return await clientDevice.send(createTokenCommand);
 }
 
-export async function getAccounts(accessToken) {
+export async function getAccounts(accessToken: string) {
   const listAccountsCommand = new ListAccountsCommand({
     accessToken: accessToken,
   });
   return await clientSso.send(listAccountsCommand);
 }
 
-export async function getAccountRoles(accessToken, accountId) {
+export async function getAccountRoles(accessToken: string, accountId: string) {
   const listAccountRolesCommand = new ListAccountRolesCommand({
     accessToken: accessToken,
     accountId: accountId,
@@ -77,9 +77,9 @@ export async function getAccountRoles(accessToken, accountId) {
 }
 
 export async function getAccountRoleCredentials(
-  accessToken,
-  accountId,
-  roleName
+  accessToken: string,
+  accountId: string,
+  roleName: string
 ) {
   const getRoleCredentialsCommand = new GetRoleCredentialsCommand({
     accessToken: accessToken,
