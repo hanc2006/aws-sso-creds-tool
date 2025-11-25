@@ -62,8 +62,7 @@ export default class AwsSso {
   public static async fromStartUrl(
     startUrl: string,
     region: string,
-    clientName: string,
-    forceLogin: boolean = false
+    clientName: string
   ): Promise<AwsSso> {
     if (!startUrl.startsWith('https://')) {
       throw new Error('startUrl must be a valid https url')
@@ -140,6 +139,7 @@ export default class AwsSso {
       clientSecret,
       grantType: 'urn:ietf:params:oauth:grant-type:device_code',
       deviceCode,
+      // AWS SDK uses 'code' parameter which takes the userCode value
       code: userCode,
     })
 
