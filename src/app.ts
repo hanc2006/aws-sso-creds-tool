@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import {
   awsCredentialsPath,
   useAccountId,
   defaultSection,
   sso_accounts,
 } from "./params.js";
-import ConfigParser from "configparser";
+import { parseINI, stringifyINI } from "confbox";
 import {
   getAccountRoleCredentials,
   getAccountRoles,
@@ -18,7 +19,17 @@ import {
 } from "./aws.js";
 import { error } from "./util.js";
 
-const config = new ConfigParser();
+interface CredentialsSection {
+  aws_access_key_id?: string;
+  aws_secret_access_key?: string;
+  aws_session_token?: string;
+}
+
+interface CredentialsConfig {
+  [section: string]: CredentialsSection;
+}
+
+let config: CredentialsConfig = {};
 
 interface AuthorizationError extends Error {
   name: string;
@@ -53,7 +64,10 @@ async function pollForAccessToken(
 const updateCredentials = async (): Promise<void> => {
   // search for credentials file first, default: ~/.aws/credentials
   try {
-    await config.readAsync(awsCredentialsPath);
+    if (existsSync(awsCredentialsPath)) {
+      const fileContent = readFileSync(awsCredentialsPath, "utf-8");
+      config = parseINI(fileContent) as CredentialsConfig;
+    }
   } catch (e) {
     error("cannot open file: " + awsCredentialsPath);
   }
@@ -102,31 +116,31 @@ const updateCredentials = async (): Promise<void> => {
           ? `${accountId}_${roleName}`
           : `${accountName}_${roleName}`;
 
-        if (!config.sections().includes(account_section_name)) {
-          config.addSection(account_section_name);
+        if (!config[account_section_name]) {
+          config[account_section_name] = {};
         }
 
-        config.set(account_section_name, "aws_access_key_id", accessKeyId);
-        config.set(account_section_name, "aws_secret_access_key", secretAccessKey);
-        config.set(account_section_name, "aws_session_token", sessionToken);
-        console.log(config.items(account_section_name));
+        config[account_section_name].aws_access_key_id = accessKeyId;
+        config[account_section_name].aws_secret_access_key = secretAccessKey;
+        config[account_section_name].aws_session_token = sessionToken;
+        console.log(config[account_section_name]);
 
         if (account_section_name === defaultSection) {
           const default_section = "default";
-          if (!config.sections().includes(default_section)) {
-            config.addSection(default_section);
+          if (!config[default_section]) {
+            config[default_section] = {};
           }
 
-          config.set(default_section, "aws_access_key_id", accessKeyId);
-          config.set(default_section, "aws_secret_access_key", secretAccessKey);
-          config.set(default_section, "aws_session_token", sessionToken);
+          config[default_section].aws_access_key_id = accessKeyId;
+          config[default_section].aws_secret_access_key = secretAccessKey;
+          config[default_section].aws_session_token = sessionToken;
         }
       }
     }
   }
 
   // saves changes into credentials file
-  config.write(awsCredentialsPath);
+  writeFileSync(awsCredentialsPath, stringifyINI(config));
   console.log("credentials updated");
 };
 

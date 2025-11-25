@@ -1,8 +1,7 @@
 import { homedir, hostname } from "os";
-import ConfModule from "conf";
-
-// Handle default export from CommonJS module
-const Conf = ConfModule.default ?? ConfModule;
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
+import { parseJSON } from "confbox";
 
 interface ConfigSchema {
   region: string;
@@ -13,43 +12,57 @@ interface ConfigSchema {
   awsCredentialsPath?: string;
 }
 
-interface ConfInstance {
-  get<K extends keyof ConfigSchema>(key: K): ConfigSchema[K];
+const defaults: ConfigSchema = {
+  region: "us-east-1",
+  ssoUrl: "https://<your-project>.awsapps.com/start#/",
+  useAccountId: true,
+  defaultSection: "<account-id>_<role-name>",
+  accounts: "account1, account2, account3",
+};
+
+// Load configuration from file, similar to conf package behavior
+function loadConfig(): ConfigSchema {
+  const configDir = join(homedir(), ".config", "auto-aws-sso-creds");
+  const configPath = join(configDir, "config.json");
+
+  if (existsSync(configPath)) {
+    try {
+      const fileContent = readFileSync(configPath, "utf-8");
+      const parsed = parseJSON<Partial<ConfigSchema>>(fileContent);
+      return { ...defaults, ...parsed };
+    } catch {
+      // If parsing fails, create config with defaults
+      return createDefaultConfig(configDir, configPath);
+    }
+  }
+
+  return createDefaultConfig(configDir, configPath);
 }
 
-type ConfConstructor = new (options: {
-  projectName: string;
-  defaults: ConfigSchema;
-}) => ConfInstance;
+function createDefaultConfig(configDir: string, configPath: string): ConfigSchema {
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(defaults, null, 2));
+  return defaults;
+}
 
-const config = new (Conf as ConfConstructor)({
-  projectName: "auto-aws-sso-creds",
-  defaults: {
-    region: "us-east-1",
-    ssoUrl: "https://<your-project>.awsapps.com/start#/",
-    useAccountId: true,
-    defaultSection: "<account-id>_<role-name>",
-    accounts: "account1, account2, account3",
-  },
-});
+const config = loadConfig();
 
-const ssoUrl = config.get("ssoUrl");
+const ssoUrl = config.ssoUrl;
 if (!ssoUrl || ssoUrl === "https://<your-project>.awsapps.com/start#/") {
   throw new Error(
-    "Please set the SSO URL. Use: npx conf set ssoUrl <your-sso-url> --cwd auto-aws-sso-creds"
+    "Please set the SSO URL in ~/.config/auto-aws-sso-creds/config.json"
   );
 }
 
 export const startUrl: string = ssoUrl;
 export const awsCredentialsPath: string =
-  config.get("awsCredentialsPath") ?? `${homedir()}/.aws/credentials`;
-export const useAccountId: boolean = config.get("useAccountId");
-export const sso_accounts: string[] = config
-  .get("accounts")
+  config.awsCredentialsPath ?? `${homedir()}/.aws/credentials`;
+export const useAccountId: boolean = config.useAccountId;
+export const sso_accounts: string[] = config.accounts
   ?.split(",")
   .map((s) => s.trim())
   .filter((s) => s) ?? [];
-export const region: string = config.get("region") ?? "us-east-1";
+export const region: string = config.region ?? "us-east-1";
 export const clientName: string = hostname();
 export const defaultSection: string =
-  config.get("defaultSection") ?? "ViewOnlyAccess";
+  config.defaultSection ?? "ViewOnlyAccess";
