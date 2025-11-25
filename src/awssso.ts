@@ -68,21 +68,13 @@ interface TokenResult {
  */
 export default class AwsSso extends EventEmitter {
   private _session: LoginSession | null = null
-  private _region: string | null = null
   private _clientSso: SSOClient | null = null
-  private readonly _autoRefresh: boolean
   private _abortController: AbortController | null = null
-  private _startUrl: string | null = null
-  private _clientName: string | null = null
-  private _profileName: string | undefined
+  private _options: AwsSsoOptions
 
   constructor(options?: AwsSsoOptions) {
     super()
-    this._autoRefresh = options?.autoRefresh ?? false
-    this._region = options?.region ?? null
-    this._startUrl = options?.startUrl ?? null
-    this._clientName = options?.clientName ?? null
-    this._profileName = options?.profileName
+    this._options = options ?? {}
   }
 
   /**
@@ -151,11 +143,11 @@ export default class AwsSso extends EventEmitter {
 
     this.emit('tokenExpired', eventData)
 
-    if (this._autoRefresh && this._startUrl && this._clientName && this._region) {
+    if (this._options.autoRefresh && this._options.startUrl && this._options.clientName && this._options.region) {
       this._refreshSession().catch((error) => {
         this.emit('tokenRefreshError', { error, profileName: this._session?.profileName })
       })
-    } else if (this._autoRefresh && (!this._startUrl || !this._clientName || !this._region)) {
+    } else if (this._options.autoRefresh && (!this._options.startUrl || !this._options.clientName || !this._options.region)) {
       this.emit('tokenRefreshError', {
         error: new Error('Cannot auto-refresh: missing startUrl, clientName, or region. Use fromStartUrl() to enable auto-refresh.'),
         profileName: this._session?.profileName,
@@ -167,13 +159,13 @@ export default class AwsSso extends EventEmitter {
    * Refreshes the session token
    */
   private async _refreshSession(): Promise<void> {
-    if (!this._startUrl || !this._clientName || !this._region) {
+    if (!this._options.startUrl || !this._options.clientName || !this._options.region) {
       throw new Error('Cannot refresh session: missing startUrl, clientName, or region')
     }
 
     try {
       const profileName = this._session?.profileName
-      await this.login(this._startUrl, this._region, this._clientName, profileName)
+      await this.login(this._options.startUrl, this._options.region, this._options.clientName, profileName)
       this.emit('tokenRefreshed', { profileName: this._session?.profileName })
     } catch (error) {
       this.emit('tokenRefreshError', { error, profileName: this._session?.profileName })
@@ -208,10 +200,10 @@ export default class AwsSso extends EventEmitter {
       throw new Error('startUrl must be a valid https url')
     }
 
-    this._startUrl = startUrl
-    this._region = region
-    this._clientName = clientName
-    this._clientSso = new SSOClient({ region: this._region })
+    this._options.startUrl = startUrl
+    this._options.region = region
+    this._options.clientName = clientName
+    this._clientSso = new SSOClient({ region: this._options.region })
 
     await this.login(startUrl, region, clientName, profileName)
   }
@@ -348,10 +340,10 @@ export default class AwsSso extends EventEmitter {
    * Gets the region for the SSO client
    */
   public get region(): string {
-    if (!this._region) {
+    if (!this._options.region) {
       throw new Error('No region configured. Call fromStartUrl() or login() first.')
     }
-    return this._region
+    return this._options.region
   }
 
   /**
@@ -417,7 +409,7 @@ export default class AwsSso extends EventEmitter {
    * Gets credentials for a specific account and role
    */
   public async getCredentials(accountId: string, roleName: string): Promise<RoleCredential> {
-    if (!this._session || !this._clientSso || !this._region) {
+    if (!this._session || !this._clientSso || !this._options.region) {
       throw new Error('No active session. Call fromStartUrl() or login() first.')
     }
     const getRoleCredentialsCommand = new GetRoleCredentialsCommand({
@@ -439,7 +431,7 @@ export default class AwsSso extends EventEmitter {
       accessKeyId: response.roleCredentials.accessKeyId,
       secretAccessKey: response.roleCredentials.secretAccessKey,
       sessionToken: response.roleCredentials.sessionToken,
-      region: this._region,
+      region: this._options.region,
     }
     if (response.roleCredentials.expiration !== undefined) {
       result.expiration = response.roleCredentials.expiration
