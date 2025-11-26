@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-import { readFile, writeFile } from "fs/promises";
+import { writeFile, readFile } from "fs/promises";
+import { homedir } from "os";
 import { parseINI, stringifyINI } from "confbox";
 import { AwsSso } from "./awssso";
 import { AwsCred } from "./awscred";
-import { error, exists } from "./util";
+import { exists } from "./util";
 
 interface CredentialsSection {
   aws_access_key_id?: string;
@@ -12,96 +13,83 @@ interface CredentialsSection {
   aws_session_token?: string;
 }
 
-interface CredentialsConfig {
+interface CredentialsFile {
   [section: string]: CredentialsSection;
 }
 
 const updateCredentials = async (): Promise<void> => {
-  // Load configuration using AwsCred class
+  // Load AWS config using AwsCred class
   const awsCred = await AwsCred.load();
-  
-  let config: CredentialsConfig = {};
 
-  // search for credentials file first, default: ~/.aws/credentials
-  try {
-    if (await exists(awsCred.awsCredentialsPath)) {
-      const fileContent = await readFile(awsCred.awsCredentialsPath, "utf-8");
-      config = parseINI(fileContent) as CredentialsConfig;
+  // Get SSO session info
+  const session = awsCred.getSession();
+  if (!session) {
+    throw new Error("No SSO session found in AWS config");
+  }
+
+  // Load existing credentials file
+  const credentialsPath = `${homedir()}/.aws/credentials`;
+  let credentialsFile: CredentialsFile = {};
+  
+  if (await exists(credentialsPath)) {
+    try {
+      const fileContent = await readFile(credentialsPath, "utf-8");
+      credentialsFile = parseINI(fileContent) as CredentialsFile;
+    } catch (e) {
+      console.error(`Warning: Could not load credentials file: ${e instanceof Error ? e.message : 'Unknown error'}`);
     }
-  } catch (e) {
-    error("cannot open file: " + awsCred.awsCredentialsPath);
   }
 
   // Create AwsSso instance and perform authentication flow
-  const awsSso = new AwsSso({ region, startUrl });
+  const awsSso = new AwsSso({ 
+    region: session.ssoRegion, 
+    startUrl: session.ssoStartUrl 
+  });
   await awsSso.login();
 
-  // Get all accounts available to the authenticated user
-  const { accountList } = await awsSso.getAccounts();
+  // Get all profiles from AWS config
+  const profiles = awsCred.getProfiles();
 
-  for (const { accountId, accountName } of accountList) {
-    if (!accountId || !accountName) {
-      continue;
-    }
+  for (const [profileName, profile] of Object.entries(profiles)) {
+    try {
+      // Use AwsSso.getCredentials method to get credentials for each profile
+      const roleCredentials = await awsSso.getCredentials(
+        profile.ssoAccountId, 
+        profile.ssoRoleName
+      );
 
-    // Get roles for each account using the AwsSso instance
-    const { roleList } = await awsSso.getAccountRoles(accountId);
+      const { accessKeyId, secretAccessKey, sessionToken } = roleCredentials;
 
-    for (const { roleName } of roleList) {
-      if (!roleName) {
+      if (!accessKeyId || !secretAccessKey || !sessionToken) {
+        console.error(`Missing credentials for profile ${profileName}`);
         continue;
       }
 
-      if (awsCred.ssoAccounts.includes(accountName)) {
-        try {
-          // Use AwsSso.getCredentials method instead of getAccountRoleCredentials
-          const roleCredentials = await awsSso.getCredentials(accountId, roleName);
-
-          const { accessKeyId, secretAccessKey, sessionToken } = roleCredentials;
-
-          if (!accessKeyId || !secretAccessKey || !sessionToken) {
-            console.error(`Missing credentials for ${accountName}_${roleName}`);
-            continue;
-          }
-
-          // default format is [account-name_AWSRoleName]
-          const account_section_name = awsCred.useAccountId
-            ? `${accountId}_${roleName}`
-            : `${accountName}_${roleName}`;
-
-          if (!config[account_section_name]) {
-            config[account_section_name] = {};
-          }
-
-          config[account_section_name].aws_access_key_id = accessKeyId;
-          config[account_section_name].aws_secret_access_key = secretAccessKey;
-          config[account_section_name].aws_session_token = sessionToken;
-          console.log(config[account_section_name]);
-
-          if (account_section_name === awsCred.defaultSection) {
-            const default_section = "default";
-            if (!config[default_section]) {
-              config[default_section] = {};
-            }
-
-            config[default_section].aws_access_key_id = accessKeyId;
-            config[default_section].aws_secret_access_key = secretAccessKey;
-            config[default_section].aws_session_token = sessionToken;
-          }
-        } catch (e) {
-          if (e instanceof Error) {
-            console.error(`${e.message} for account ${accountId}, role: ${roleName}`);
-          } else {
-            console.error(`Error fetching credentials for ${accountName}_${roleName}`);
-          }
-        }
+      // Update credentials for this profile
+      if (!credentialsFile[profileName]) {
+        credentialsFile[profileName] = {};
+      }
+      credentialsFile[profileName].aws_access_key_id = accessKeyId;
+      credentialsFile[profileName].aws_secret_access_key = secretAccessKey;
+      credentialsFile[profileName].aws_session_token = sessionToken;
+      
+      console.log(`Updated credentials for profile: ${profileName}`);
+    } catch (e) {
+      if (e instanceof Error) {
+        console.error(`${e.message} for profile ${profileName}`);
+      } else {
+        console.error(`Error fetching credentials for profile ${profileName}`);
       }
     }
   }
 
-  // saves changes into credentials file
-  await writeFile(awsCred.awsCredentialsPath, stringifyINI(config));
-  console.log("credentials updated");
+  // Save credentials file
+  try {
+    await writeFile(credentialsPath, stringifyINI(credentialsFile));
+    console.log("credentials updated");
+  } catch (e) {
+    throw new Error(`Failed to save credentials: ${e instanceof Error ? e.message : 'Unknown error'}`);
+  }
 };
 
 updateCredentials();
