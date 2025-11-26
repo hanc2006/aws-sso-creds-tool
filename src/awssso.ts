@@ -16,16 +16,17 @@ import {
 import { EventEmitter } from 'events'
 import { setTimeout as setTimeoutPromise } from 'node:timers/promises'
 import open from 'open'
+import { isExpired, expiresInToUTCString } from './date'
 
 export interface LoginSession {
   accessToken: string
-  expiresAt?: number
+  expiresAt?: string
   profileName?: string
 }
 
 export interface TokenExpiredEventData {
   profileName?: string
-  expiresAt?: number
+  expiresAt?: string
   expiredAt: number
 }
 
@@ -100,13 +101,13 @@ export default class AwsSso extends EventEmitter implements Disposable {
     }
 
     if (this._session?.expiresAt) {
-      const now = Date.now()
-      const timeUntilExpiry = this._session.expiresAt - now
-
-      if (timeUntilExpiry <= 0) {
+      if (isExpired(this._session.expiresAt)) {
         // Token already expired
         this._handleTokenExpiration()
       } else {
+        // Calculate time until expiry
+        const expiresAtDate = new Date(this._session.expiresAt.replace('Z', '+00:00'))
+        const timeUntilExpiry = expiresAtDate.getTime() - Date.now()
         // Set timer with a maximum limit to prevent excessively long timeouts
         const timeout = Math.min(timeUntilExpiry, AwsSso.MAX_TIMEOUT_MS)
         this._abortController = new AbortController()
@@ -115,7 +116,7 @@ export default class AwsSso extends EventEmitter implements Disposable {
         setTimeoutPromise(timeout, undefined, { signal })
           .then(() => {
             // If we hit the max timeout but token hasn't expired yet, re-check
-            if (this._session?.expiresAt && Date.now() < this._session.expiresAt) {
+            if (this._session?.expiresAt && !isExpired(this._session.expiresAt)) {
               this._startExpirationCheck()
             } else {
               this._handleTokenExpiration()
@@ -241,7 +242,7 @@ export default class AwsSso extends EventEmitter implements Disposable {
     }
 
     if (tokenResponse.expiresIn) {
-      session.expiresAt = Date.now() + tokenResponse.expiresIn * 1000
+      session.expiresAt = expiresInToUTCString(tokenResponse.expiresIn)
     }
     if (profileName !== undefined) {
       session.profileName = profileName
@@ -276,9 +277,9 @@ export default class AwsSso extends EventEmitter implements Disposable {
   }
 
   /**
-   * Gets the expiration time from the current session
+   * Gets the expiration time from the current session as UTC string
    */
-  public get expiresAt(): number | undefined {
+  public get expiresAt(): string | undefined {
     return this._session?.expiresAt
   }
 
@@ -289,7 +290,7 @@ export default class AwsSso extends EventEmitter implements Disposable {
     if (!this._session?.expiresAt) {
       return false
     }
-    return Date.now() >= this._session.expiresAt
+    return isExpired(this._session.expiresAt)
   }
 
   /**
