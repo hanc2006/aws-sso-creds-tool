@@ -47,7 +47,6 @@ export interface AccountRolesResult {
 }
 
 export interface AwsSsoOptions {
-  autoRefresh?: boolean
   region: string
   startUrl: string
   profileName?: string
@@ -68,11 +67,20 @@ export default class AwsSso extends EventEmitter implements Disposable {
   private _clientSso: SSOClient
   private _abortController: AbortController | null = null
   private _options: AwsSsoOptions
+  private _autoRefresh: boolean = false
 
   constructor(options: AwsSsoOptions) {
     super()
     this._options = options
     this._clientSso = new SSOClient({ region: options.region })
+  }
+
+  /**
+   * Enables or disables automatic token refresh on expiration
+   * @param enabled - Whether to enable automatic token refresh
+   */
+  public enableRefreshToken(enabled: boolean): void {
+    this._autoRefresh = enabled
   }
 
   /**
@@ -150,7 +158,7 @@ export default class AwsSso extends EventEmitter implements Disposable {
 
     this.emit('tokenExpired', eventData)
 
-    if (this._options.autoRefresh) {
+    if (this._autoRefresh) {
       this._refreshSession().catch((error) => {
         this.emit('tokenRefreshError', { error, profileName: this._session?.profileName })
       })
