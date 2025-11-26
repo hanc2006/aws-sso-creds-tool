@@ -1,129 +1,135 @@
 import { homedir, hostname } from "os";
-import { readFile, mkdir, writeFile } from "fs/promises";
-import { join } from "path";
-import { parseJSON, parseINI, stringifyINI } from "confbox";
+import { readFile } from "fs/promises";
+import { parseINI } from "confbox";
 import { exists } from "./util";
 
-interface CredentialsSection {
-  aws_access_key_id?: string;
-  aws_secret_access_key?: string;
-  aws_session_token?: string;
+/**
+ * Represents the SSO session configuration from ~/.aws/config
+ */
+export interface CredentialsConfigSession {
+  ssoStartUrl: string;
+  ssoRegion: string;
+  ssoRegistrationScopes: string;
 }
-
-interface CredentialsConfig {
-  [section: string]: CredentialsSection;
-}
-
-interface ConfigSchema {
-  region: string;
-  ssoUrl: string;
-  useAccountId: boolean;
-  defaultSection: string;
-  accounts: string;
-  awsCredentialsPath?: string;
-}
-
-const defaults: ConfigSchema = {
-  region: "us-east-1",
-  ssoUrl: "https://<your-project>.awsapps.com/start#/",
-  useAccountId: true,
-  defaultSection: "<account-id>_<role-name>",
-  accounts: "account1, account2, account3",
-};
 
 /**
- * AwsCred class encapsulates configuration loading and credential file path management
+ * Represents a profile configuration from ~/.aws/config
+ */
+export interface CredentialsConfigProfile {
+  region: string;
+  ssoSession: string;
+  ssoAccountId: string;
+  ssoRoleName: string;
+}
+
+/**
+ * Represents the full AWS config file structure
+ */
+export interface CredentialsConfig {
+  session: {
+    [name: string]: CredentialsConfigSession;
+  };
+  profile: {
+    [name: string]: CredentialsConfigProfile;
+  };
+}
+
+/**
+ * Raw INI section as parsed from the config file
+ */
+interface RawIniSection {
+  sso_start_url?: string;
+  sso_region?: string;
+  sso_registration_scopes?: string;
+  region?: string;
+  sso_session?: string;
+  sso_account_id?: string;
+  sso_role_name?: string;
+  [key: string]: string | undefined;
+}
+
+/**
+ * Raw INI config as parsed from file
+ */
+interface RawIniConfig {
+  [section: string]: RawIniSection;
+}
+
+/**
+ * AwsCred class encapsulates loading and parsing the AWS config file (~/.aws/config)
  */
 export default class AwsCred {
-  private readonly _config: ConfigSchema;
-  private _credentials: CredentialsConfig = {};
+  private readonly _config: CredentialsConfig;
+  private readonly _awsConfigPath: string;
 
-  private constructor(config: ConfigSchema) {
+  private constructor(config: CredentialsConfig, awsConfigPath: string) {
     this._config = config;
+    this._awsConfigPath = awsConfigPath;
   }
 
   /**
-   * Creates an AwsCred instance by loading configuration from the config file
-   * Performs async file operations to load or create the config
+   * Creates an AwsCred instance by loading configuration from ~/.aws/config
    */
   public static async load(): Promise<AwsCred> {
-    const config = await AwsCred.loadConfig();
-
-    if (!config.ssoUrl || config.ssoUrl === "https://<your-project>.awsapps.com/start#/") {
-      throw new Error(
-        "Please set the SSO URL in ~/.config/auto-aws-sso-creds/config.json"
-      );
-    }
-
-    return new AwsCred(config);
+    const awsConfigPath = `${homedir()}/.aws/config`;
+    const config = await AwsCred.loadAwsConfig(awsConfigPath);
+    return new AwsCred(config, awsConfigPath);
   }
 
   /**
-   * Load configuration from file, similar to conf package behavior
+   * Load and parse the AWS config file
    */
-  private static async loadConfig(): Promise<ConfigSchema> {
-    const configDir = join(homedir(), ".config", "auto-aws-sso-creds");
-    const configPath = join(configDir, "config.json");
+  private static async loadAwsConfig(configPath: string): Promise<CredentialsConfig> {
+    const result: CredentialsConfig = {
+      session: {},
+      profile: {},
+    };
 
-    if (await exists(configPath)) {
-      try {
-        const fileContent = await readFile(configPath, "utf-8");
-        const parsed = parseJSON<Partial<ConfigSchema>>(fileContent);
-        return { ...defaults, ...parsed };
-      } catch {
-        // If parsing fails, create config with defaults
-        return AwsCred.createDefaultConfig(configDir, configPath);
+    if (!(await exists(configPath))) {
+      throw new Error(`AWS config file not found at ${configPath}`);
+    }
+
+    try {
+      const fileContent = await readFile(configPath, "utf-8");
+      const rawConfig = parseINI(fileContent) as RawIniConfig;
+
+      for (const sectionName of Object.keys(rawConfig)) {
+        const section = rawConfig[sectionName];
+        if (!section) {
+          continue;
+        }
+
+        if (sectionName.startsWith("sso-session ")) {
+          // Parse SSO session section
+          const sessionName = sectionName.replace("sso-session ", "");
+          result.session[sessionName] = {
+            ssoStartUrl: section.sso_start_url ?? "",
+            ssoRegion: section.sso_region ?? "",
+            ssoRegistrationScopes: section.sso_registration_scopes ?? "",
+          };
+        } else if (sectionName.startsWith("profile ")) {
+          // Parse profile section
+          const profileName = sectionName.replace("profile ", "");
+          result.profile[profileName] = {
+            region: section.region ?? "",
+            ssoSession: section.sso_session ?? "",
+            ssoAccountId: section.sso_account_id ?? "",
+            ssoRoleName: section.sso_role_name ?? "",
+          };
+        }
       }
+    } catch (e) {
+      throw new Error(`Failed to load AWS config: ${e instanceof Error ? e.message : "Unknown error"}`);
     }
 
-    return AwsCred.createDefaultConfig(configDir, configPath);
+    return result;
   }
 
   /**
-   * Create default configuration file
+   * Gets the path to the AWS config file
    */
-  private static async createDefaultConfig(configDir: string, configPath: string): Promise<ConfigSchema> {
-    await mkdir(configDir, { recursive: true });
-    await writeFile(configPath, JSON.stringify(defaults, null, 2));
-    return defaults;
-  }
-
-  /**
-   * Gets the SSO start URL
-   */
-  public get startUrl(): string {
-    return this._config.ssoUrl;
-  }
-
-  /**
-   * Gets the AWS credentials file path
-   */
-  public get awsCredentialsPath(): string {
-    return this._config.awsCredentialsPath ?? `${homedir()}/.aws/credentials`;
-  }
-
-  /**
-   * Gets whether to use account ID in section names
-   */
-  public get useAccountId(): boolean {
-    return this._config.useAccountId;
-  }
-
-  /**
-   * Gets the list of SSO accounts
-   */
-  public get ssoAccounts(): string[] {
-    return this._config.accounts
-      ?.split(",")
-      .map((s) => s.trim())
-      .filter((s) => s) ?? [];
-  }
-
-  /**
-   * Gets the AWS region
-   */
-  public get region(): string {
-    return this._config.region ?? "us-east-1";
+  public get awsConfigPath(): string {
+    return this._awsConfigPath;
   }
 
   /**
@@ -134,53 +140,50 @@ export default class AwsCred {
   }
 
   /**
-   * Gets the default section name
+   * Returns a list of profile names
    */
-  public get defaultSection(): string {
-    return this._config.defaultSection ?? "ViewOnlyAccess";
+  public listProfiles(): string[] {
+    return Object.keys(this._config.profile);
   }
 
   /**
-   * Load credentials from the AWS credentials file
+   * Returns a specific profile by name
    */
-  public async loadCredentials(): Promise<void> {
-    if (await exists(this.awsCredentialsPath)) {
-      try {
-        const fileContent = await readFile(this.awsCredentialsPath, "utf-8");
-        this._credentials = parseINI(fileContent) as CredentialsConfig;
-      } catch (e) {
-        console.error(`Warning: Could not load credentials file: ${e instanceof Error ? e.message : 'Unknown error'}`);
-        this._credentials = {};
-      }
-    }
+  public getProfile(name: string): CredentialsConfigProfile | undefined {
+    return this._config.profile[name];
   }
 
   /**
-   * Set credentials for a specific section
+   * Returns all profiles
    */
-  public setCredentials(
-    sectionName: string,
-    accessKeyId: string,
-    secretAccessKey: string,
-    sessionToken: string
-  ): void {
-    if (!this._credentials[sectionName]) {
-      this._credentials[sectionName] = {};
-    }
-    this._credentials[sectionName].aws_access_key_id = accessKeyId;
-    this._credentials[sectionName].aws_secret_access_key = secretAccessKey;
-    this._credentials[sectionName].aws_session_token = sessionToken;
+  public getProfiles(): { [name: string]: CredentialsConfigProfile } {
+    return this._config.profile;
   }
 
   /**
-   * Save credentials to the AWS credentials file
+   * Returns the SSO session configuration
+   * Returns the first session if multiple exist
    */
-  public async saveCredentials(): Promise<void> {
-    try {
-      await writeFile(this.awsCredentialsPath, stringifyINI(this._credentials));
-    } catch (e) {
-      throw new Error(`Failed to save credentials to ${this.awsCredentialsPath}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+  public getSession(): CredentialsConfigSession | undefined {
+    const sessionNames = Object.keys(this._config.session);
+    if (sessionNames.length === 0) {
+      return undefined;
     }
+    return this._config.session[sessionNames[0] as string];
+  }
+
+  /**
+   * Returns a specific SSO session by name
+   */
+  public getSessionByName(name: string): CredentialsConfigSession | undefined {
+    return this._config.session[name];
+  }
+
+  /**
+   * Returns all SSO sessions
+   */
+  public getSessions(): { [name: string]: CredentialsConfigSession } {
+    return this._config.session;
   }
 }
 
