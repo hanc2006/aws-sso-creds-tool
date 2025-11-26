@@ -33,7 +33,7 @@ const updateCredentials = async (): Promise<void> => {
   }
 
   // Create AwsSso instance and perform authentication flow
-  const awsSso = new AwsSso({ region, startUrl });
+  const awsSso = new AwsSso({ region: awsCred.region, startUrl: awsCred.startUrl });
   await awsSso.login();
 
   // Get all accounts available to the authenticated user
