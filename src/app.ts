@@ -32,8 +32,9 @@ const updateCredentials = async (): Promise<void> => {
     error("cannot open file: " + awsCred.awsCredentialsPath);
   }
 
-  // Create AwsSso instance which handles the full authentication flow
-  const awsSso = await AwsSso.fromStartUrl(awsCred.startUrl, awsCred.region, awsCred.clientName);
+  // Create AwsSso instance and perform authentication flow
+  const awsSso = new AwsSso({ region, startUrl });
+  await awsSso.login();
 
   // Get all accounts available to the authenticated user
   const { accountList } = await awsSso.getAccounts();
