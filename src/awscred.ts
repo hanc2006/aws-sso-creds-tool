@@ -1,8 +1,18 @@
 import { homedir, hostname } from "os";
 import { readFile, mkdir, writeFile } from "fs/promises";
 import { join } from "path";
-import { parseJSON } from "confbox";
+import { parseJSON, parseINI, stringifyINI } from "confbox";
 import { exists } from "./util";
+
+interface CredentialsSection {
+  aws_access_key_id?: string;
+  aws_secret_access_key?: string;
+  aws_session_token?: string;
+}
+
+interface CredentialsConfig {
+  [section: string]: CredentialsSection;
+}
 
 interface ConfigSchema {
   region: string;
@@ -26,6 +36,7 @@ const defaults: ConfigSchema = {
  */
 export default class AwsCred {
   private readonly _config: ConfigSchema;
+  private _credentials: CredentialsConfig = {};
 
   private constructor(config: ConfigSchema) {
     this._config = config;
@@ -127,6 +138,49 @@ export default class AwsCred {
    */
   public get defaultSection(): string {
     return this._config.defaultSection ?? "ViewOnlyAccess";
+  }
+
+  /**
+   * Load credentials from the AWS credentials file
+   */
+  public async loadCredentials(): Promise<void> {
+    if (await exists(this.awsCredentialsPath)) {
+      try {
+        const fileContent = await readFile(this.awsCredentialsPath, "utf-8");
+        this._credentials = parseINI(fileContent) as CredentialsConfig;
+      } catch (e) {
+        console.error(`Warning: Could not load credentials file: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        this._credentials = {};
+      }
+    }
+  }
+
+  /**
+   * Set credentials for a specific section
+   */
+  public setCredentials(
+    sectionName: string,
+    accessKeyId: string,
+    secretAccessKey: string,
+    sessionToken: string
+  ): void {
+    if (!this._credentials[sectionName]) {
+      this._credentials[sectionName] = {};
+    }
+    this._credentials[sectionName].aws_access_key_id = accessKeyId;
+    this._credentials[sectionName].aws_secret_access_key = secretAccessKey;
+    this._credentials[sectionName].aws_session_token = sessionToken;
+  }
+
+  /**
+   * Save credentials to the AWS credentials file
+   */
+  public async saveCredentials(): Promise<void> {
+    try {
+      await writeFile(this.awsCredentialsPath, stringifyINI(this._credentials));
+    } catch (e) {
+      throw new Error(`Failed to save credentials to ${this.awsCredentialsPath}: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
   }
 }
 

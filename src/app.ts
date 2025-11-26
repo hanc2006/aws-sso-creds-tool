@@ -1,36 +1,14 @@
 #!/usr/bin/env node
 
-import { readFile, writeFile } from "fs/promises";
-import { parseINI, stringifyINI } from "confbox";
 import { AwsSso } from "./awssso";
 import { AwsCred } from "./awscred";
-import { error, exists } from "./util";
-
-interface CredentialsSection {
-  aws_access_key_id?: string;
-  aws_secret_access_key?: string;
-  aws_session_token?: string;
-}
-
-interface CredentialsConfig {
-  [section: string]: CredentialsSection;
-}
 
 const updateCredentials = async (): Promise<void> => {
   // Load configuration using AwsCred class
   const awsCred = await AwsCred.load();
-  
-  let config: CredentialsConfig = {};
 
-  // search for credentials file first, default: ~/.aws/credentials
-  try {
-    if (await exists(awsCred.awsCredentialsPath)) {
-      const fileContent = await readFile(awsCred.awsCredentialsPath, "utf-8");
-      config = parseINI(fileContent) as CredentialsConfig;
-    }
-  } catch (e) {
-    error("cannot open file: " + awsCred.awsCredentialsPath);
-  }
+  // Load existing credentials
+  await awsCred.loadCredentials();
 
   // Create AwsSso instance and perform authentication flow
   const awsSso = new AwsSso({ region: awsCred.region, startUrl: awsCred.startUrl });
@@ -69,24 +47,11 @@ const updateCredentials = async (): Promise<void> => {
             ? `${accountId}_${roleName}`
             : `${accountName}_${roleName}`;
 
-          if (!config[account_section_name]) {
-            config[account_section_name] = {};
-          }
-
-          config[account_section_name].aws_access_key_id = accessKeyId;
-          config[account_section_name].aws_secret_access_key = secretAccessKey;
-          config[account_section_name].aws_session_token = sessionToken;
-          console.log(config[account_section_name]);
+          awsCred.setCredentials(account_section_name, accessKeyId, secretAccessKey, sessionToken);
+          console.log(`Updated credentials for ${account_section_name}`);
 
           if (account_section_name === awsCred.defaultSection) {
-            const default_section = "default";
-            if (!config[default_section]) {
-              config[default_section] = {};
-            }
-
-            config[default_section].aws_access_key_id = accessKeyId;
-            config[default_section].aws_secret_access_key = secretAccessKey;
-            config[default_section].aws_session_token = sessionToken;
+            awsCred.setCredentials("default", accessKeyId, secretAccessKey, sessionToken);
           }
         } catch (e) {
           if (e instanceof Error) {
@@ -100,7 +65,7 @@ const updateCredentials = async (): Promise<void> => {
   }
 
   // saves changes into credentials file
-  await writeFile(awsCred.awsCredentialsPath, stringifyINI(config));
+  await awsCred.saveCredentials();
   console.log("credentials updated");
 };
 
