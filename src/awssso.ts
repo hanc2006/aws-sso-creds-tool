@@ -55,8 +55,14 @@ export interface AwsSsoOptions {
 /**
  * AwsSso class encapsulates the SSO session and credential fetching logic
  * Extends EventEmitter to emit token expiration events
+ * Implements Disposable pattern for resource cleanup
  */
-export default class AwsSso extends EventEmitter {
+export default class AwsSso extends EventEmitter implements Disposable {
+  /**
+   * Static identifier for this class
+   */
+  public static readonly id = 'aws-sso-creds-tool'
+
   private _session: LoginSession | null = null
   private _clientSso: SSOClient
   private _abortController: AbortController | null = null
@@ -66,6 +72,15 @@ export default class AwsSso extends EventEmitter {
     super()
     this._options = options
     this._clientSso = new SSOClient({ region: options.region })
+  }
+
+  /**
+   * Disposes of resources used by this instance
+   * Implements the Disposable pattern
+   */
+  [Symbol.dispose](): void {
+    this.stopExpirationCheck()
+    this._session = null
   }
 
   /**
@@ -178,7 +193,7 @@ export default class AwsSso extends EventEmitter {
 
     // Register client
     const registerClientCommand = new RegisterClientCommand({
-      clientName: 'aws-sso-creds-tool',
+      clientName: AwsSso.id,
       clientType: 'public',
     })
     const registerResponse = await clientDevice.send(registerClientCommand)
